@@ -286,9 +286,12 @@ cd frontend && npm run dev
 
 ---
 
-## DEPLOYMENT (PRODUCTION)
+## DEPLOYMENT (PRODUCTION - VPS ONLY)
 
-## Option 1: VPS (Ubuntu)
+> This project is intended to run on your own **VPS** (not AWS/GCP managed deployment in this guide).
+> Recommended baseline: Ubuntu 22.04 LTS, 2 vCPU, 4 GB RAM, 60+ GB SSD.
+
+## VPS (Ubuntu) Deployment
 
 ### 1) Install Node.js + Nginx + PM2
 
@@ -298,7 +301,37 @@ sudo apt-get install -y nodejs nginx
 sudo npm install -g pm2
 ```
 
-### 2) Build app
+### 2) Clone project and install dependencies
+
+```bash
+sudo mkdir -p /var/www/heat-relief
+sudo chown -R $USER:$USER /var/www/heat-relief
+cd /var/www/heat-relief
+git clone <YOUR_REPO_URL> .
+npm install
+```
+
+### 3) Configure environment variables
+
+```bash
+cp backend/.env.example backend/.env
+cp frontend/.env.example frontend/.env.local
+```
+
+Edit production values in `backend/.env` and `frontend/.env.local`:
+
+- backend:
+  - `NODE_ENV=production`
+  - `DATABASE_URL=...`
+  - `JWT_SECRET=<long-random-secret>`
+  - `EMAIL_ENCRYPTION_KEY=<64-char-hex>`
+  - `CORS_ORIGIN=https://your-domain.com`
+  - `FORCE_HTTPS=true`
+- frontend:
+  - `NEXT_PUBLIC_API_BASE_URL=https://your-domain.com/api/v1`
+  - `NEXT_PUBLIC_MAPBOX_TOKEN=...`
+
+### 4) Build app
 
 ```bash
 # backend
@@ -312,104 +345,56 @@ npm ci
 npm run build
 ```
 
-### 3) Run backend with PM2
+### 5) Run backend + frontend with PM2
+
+Use included PM2 file:
 
 ```bash
-cd ../backend
-pm2 start dist/server.js --name heat-relief-api
+cd /var/www/heat-relief
+pm2 start deploy/vps/ecosystem.config.cjs
 pm2 save
 pm2 startup
 ```
 
-### 4) Setup Nginx reverse proxy
-
-Example `/etc/nginx/sites-available/heat-relief`:
-
-```nginx
-server {
-    listen 80;
-    server_name your-domain.com;
-
-    location /api/ {
-        proxy_pass http://127.0.0.1:4000/api/;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-
-    location / {
-        proxy_pass http://127.0.0.1:3000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-}
-```
-
-Enable config:
+Check status:
 
 ```bash
-sudo ln -s /etc/nginx/sites-available/heat-relief /etc/nginx/sites-enabled/
+pm2 status
+pm2 logs heat-relief-backend
+pm2 logs heat-relief-frontend
+```
+
+### 6) Setup Nginx reverse proxy
+
+Use included config:
+
+```bash
+sudo cp /var/www/heat-relief/deploy/vps/nginx.heat-relief.conf /etc/nginx/sites-available/heat-relief
+sudo ln -sf /etc/nginx/sites-available/heat-relief /etc/nginx/sites-enabled/heat-relief
+sudo rm -f /etc/nginx/sites-enabled/default
 sudo nginx -t
 sudo systemctl reload nginx
 ```
 
-### 5) SSL using Let’s Encrypt
+### 7) SSL using Let’s Encrypt
 
 ```bash
 sudo apt install -y certbot python3-certbot-nginx
 sudo certbot --nginx -d your-domain.com
 ```
 
----
+### 8) Firewall + hardening (recommended)
 
-## Option 2: Cloud (AWS / GCP)
+```bash
+sudo ufw allow OpenSSH
+sudo ufw allow 'Nginx Full'
+sudo ufw enable
+```
 
-### Architecture recommendation
-
-- Frontend: Vercel / Cloud Run / ECS Fargate
-- Backend API: ECS / EC2 / Cloud Run / App Engine
-- DB: Managed PostgreSQL (RDS / Cloud SQL) + PostGIS enabled
-- Secrets: AWS Secrets Manager / GCP Secret Manager
-
-### High-level AWS steps
-
-1. Provision RDS PostgreSQL.
-2. Enable PostGIS on DB.
-3. Deploy backend container to ECS/EC2.
-4. Deploy frontend to Vercel or ECS.
-5. Configure ALB + HTTPS + custom domain.
-6. Set environment variables in service/task definition.
-
-### High-level GCP steps
-
-1. Provision Cloud SQL PostgreSQL.
-2. Enable PostGIS extension.
-3. Deploy backend to Cloud Run.
-4. Deploy frontend to Cloud Run / Firebase Hosting / Vercel.
-5. Configure HTTPS and domain mapping.
-6. Set env vars via Cloud Run service config.
-
-### Database hosting notes
-
-- Use private networking/VPC where possible.
-- Restrict inbound CIDRs.
-- Enable automated backups + PITR.
-- Tune connection pooling.
-
-### Environment variables in cloud
-
-Set at deployment platform level (not in repo):
-
-- `DATABASE_URL`
-- `JWT_SECRET`
-- `EMAIL_ENCRYPTION_KEY`
-- `CORS_ORIGIN`
-- `FORCE_HTTPS=true`
-- `NEXT_PUBLIC_API_BASE_URL`
-- `NEXT_PUBLIC_MAPBOX_TOKEN`
+Optional:
+- Enable automatic security updates (`unattended-upgrades`).
+- Restrict PostgreSQL to local/private network only.
+- Add daily DB backup cron.
 
 ---
 
@@ -481,9 +466,18 @@ npx cap open ios
 - Run `npx cap sync` after dependency/config changes.
 - Check Android Studio/Xcode SDK and signing configs.
 
+### 8) VPS shows 502 Bad Gateway
+- Verify PM2 apps are running: `pm2 status`.
+- Check backend/frontend logs: `pm2 logs heat-relief-backend` and `pm2 logs heat-relief-frontend`.
+- Confirm Nginx upstream ports (`3000`, `4000`) match running services.
+
+### 9) SSL cert did not issue
+- Ensure DNS `A` record points to VPS IP.
+- Ensure ports 80/443 are open in firewall/security group.
+- Re-run: `sudo certbot --nginx -d your-domain.com`.
+
 ---
 
 ## Project Credits
 
 This project is developed by **BHARATTECH** by using **Rivinity Ai** in collaboration with **DR.Kasif Imdad**.
-
